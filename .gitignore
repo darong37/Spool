@@ -1,0 +1,35 @@
+# Perl
+*.bak
+*.swp
+*~
+
+# CPAN / build artifacts
+Makefile
+Makefile.old
+blib/
+_build/
+Build
+MYMETA.*
+META.json
+META.yml
+pm_to_blib
+*.ppd
+
+# cpanm
+local/
+.cpanm/
+
+# prove / test output
+*.tap
+.prove
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project local files
+CLAUDE.md
+lib/
+.claude/worktrees/
+.claude/commands/
+.claude/settings.json
