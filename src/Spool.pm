@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use Data::Dumper;
 use File::Path qw(remove_tree);
+use POSIX qw(_exit);
 use TableTools qw(validate detach attach);
 # TableTools::group は完全修飾で呼ぶ（Spool::group との衝突回避）
 
@@ -24,6 +25,29 @@ sub _read_do {
     die "Failed to read $path: $@" if $@;
     die "Failed to read $path: file not found or empty" unless defined $data;
     return $data;
+}
+
+sub _run_in_fork {
+    my ($dir, $code) = @_;
+    my $error_file = "$dir/error.do";
+    my $pid = fork();
+    die "fork failed: $!" unless defined $pid;
+    if ($pid == 0) {
+        eval { $code->() };
+        my $err = $@;
+        if ($err) {
+            eval { _write_do($error_file, $err) };
+            _exit(1);
+        }
+        _exit(0);
+    }
+    waitpid($pid, 0);
+    if ($? != 0) {
+        my $msg = (-f $error_file) ? do($error_file) : "confirm failed for spool in $dir";
+        unlink $error_file if -f $error_file;
+        die $msg;
+    }
+    unlink $error_file if -f $error_file;
 }
 
 # ---- write-side object API ----
@@ -75,21 +99,27 @@ sub lines {
     my ($spool_id) = @_;
     my $dir = "$BASE/$spool_id";
     die "already confirmed: $spool_id" if -d "$dir/items";
-    my $rows = do "$dir/rows.do";
-    die "invalid spool data for $spool_id: $@" if $@;
-    die "invalid spool data for $spool_id" unless defined $rows;
+    _run_in_fork($dir, sub {
+        my $rows = do "$dir/rows.do";
+        die "invalid spool data for $spool_id: $@" if $@;
+        die "invalid spool data for $spool_id" unless defined $rows;
+        my $meta = _read_do("$dir/meta.do");
+        my $items_tmp = "$dir/items_tmp";
+        remove_tree($items_tmp) if -d $items_tmp;
+        mkdir $items_tmp or die "Cannot create items_tmp/: $!";
+        my $count = 0;
+        for my $row (@$rows) {
+            _write_do(sprintf('%s/%08d.do', $items_tmp, $count), $row);
+            $count++;
+        }
+        rename $items_tmp, "$dir/items" or die "Cannot rename items: $!";
+        $meta->{mode}  = 'lines';
+        $meta->{count} = $count;
+        _write_do("$dir/meta.do", $meta);
+        unlink "$dir/rows.do";
+    });
     my $meta = _read_do("$dir/meta.do");
-    mkdir "$dir/items" or die "Cannot create items/: $!";
-    my $count = 0;
-    for my $row (@$rows) {
-        _write_do(sprintf('%s/items/%08d.do', $dir, $count), $row);
-        $count++;
-    }
-    $meta->{mode}  = 'lines';
-    $meta->{count} = $count;
-    _write_do("$dir/meta.do", $meta);
-    unlink "$dir/rows.do";
-    return $count;
+    return $meta->{count};
 }
 
 sub records {

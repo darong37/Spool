@@ -735,4 +735,18 @@ subtest 'group() multi-level with multi-col first level' => sub {
     cleanup();
 };
 
+subtest 'lines() cleans up stale items_tmp/ from previous failed run' => sub {
+    cleanup();
+    my $spool = Spool->open('test001');
+    $spool->add({ a => 1 });
+    $spool->close();
+    # 前回の失敗で残った items_tmp/ を再現
+    mkdir "$BASE/test001/items_tmp";
+    open my $fh, '>', "$BASE/test001/items_tmp/stale.do"; CORE::close $fh;
+    Spool::lines('test001');
+    ok  -d  "$BASE/test001/items",     'items/ created';
+    ok  !-d "$BASE/test001/items_tmp", 'items_tmp/ cleaned up after lines()';
+    cleanup();
+};
+
 done_testing;
