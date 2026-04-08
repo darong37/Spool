@@ -19,7 +19,8 @@ Spool 独自のグループ化ロジックを排除する。
 ### インポートの追加
 
 ```perl
-use TableTools qw(validate group detach attach);
+use TableTools qw(validate detach attach);
+# TableTools::group は完全修飾で呼ぶ（Spool::group との名前衝突回避のためインポートしない）
 ```
 
 ### group() の仕様

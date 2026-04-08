@@ -145,7 +145,7 @@ sub group {
     my $dir = "$BASE/$spool_id";
     die "already confirmed: $spool_id" if -d "$dir/items";
     my $meta = _read_do("$dir/meta.do");
-    die "order is required for group()" unless $meta->{order};
+    die "order is required for group(): $spool_id" unless $meta->{order};
     my $rows = do "$dir/rows.do";
     die "invalid spool data for $spool_id: $@" if $@;
     die "invalid spool data for $spool_id" unless defined $rows;
@@ -154,6 +154,7 @@ sub group {
     my $items;
     if (@$rows) {
         my $table;
+        # attrs が空ハッシュの場合は未設定扱いとして自動型検出ルートを使う
         if ($meta->{attrs} && %{ $meta->{attrs} }) {
             $table = attach($rows, { '#' => { attrs => $meta->{attrs}, order => $meta->{order} } });
             $table = validate($table);
