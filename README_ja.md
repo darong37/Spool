@@ -69,7 +69,7 @@ Spool::remove('myspool'); # 使い終わったら削除
 
 ### group() の item 構造
 
-`order = ['file', 'line', 'text']` で `group('id', ['file'])` を呼んだ場合：
+`order = ['file', 'line', 'text']` で `Spool::group('myspool', ['file'])` を呼んだ場合：
 
 ```perl
 # item 0:
@@ -82,7 +82,7 @@ Spool::remove('myspool'); # 使い終わったら削除
 }
 ```
 
-`order` に含まれない列は子には渡りません。
+キー列は親レベルに引き上げられ、それ以外の全列が `'@'` 配下の子行に入ります。
 
 ## spool_id の制約
 

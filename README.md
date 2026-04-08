@@ -70,7 +70,7 @@ Spool::remove('myspool'); # delete spool when done
 
 ### group() Item Structure
 
-Given rows with `order = ['file', 'line', 'text']` and `group('id', ['file'])`:
+Given rows with `order = ['file', 'line', 'text']` and `Spool::group('myspool', ['file'])`:
 
 ```perl
 # Item 0:
@@ -83,7 +83,7 @@ Given rows with `order = ['file', 'line', 'text']` and `group('id', ['file'])`:
 }
 ```
 
-Columns not listed in `order` are excluded from children.
+Key columns are promoted to the parent level; all other columns appear in the child rows under `'@'`.
 
 ## spool_id Rules
 
