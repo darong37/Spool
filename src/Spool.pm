@@ -30,6 +30,7 @@ sub _read_do {
 sub _run_in_fork {
     my ($dir, $code) = @_;
     my $error_file = "$dir/error.do";
+    unlink $error_file if -f $error_file;
     my $pid = fork();
     die "fork failed: $!" unless defined $pid;
     if ($pid == 0) {
@@ -43,7 +44,12 @@ sub _run_in_fork {
     }
     waitpid($pid, 0);
     if ($? != 0) {
-        my $msg = (-f $error_file) ? do($error_file) : "confirm failed for spool in $dir";
+        my $msg;
+        if (-f $error_file) {
+            $msg = do($error_file);
+            $msg = "confirm failed (error.do unreadable: $@)" if $@;
+        }
+        $msg //= "confirm failed for spool in $dir";
         unlink $error_file if -f $error_file;
         die $msg;
     }
