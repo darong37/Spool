@@ -183,45 +183,45 @@ sub group {
     my ($spool_id, @groups) = @_;
     my $dir = "$BASE/$spool_id";
     die "already confirmed: $spool_id" if -d "$dir/items";
-    my $meta = _read_do("$dir/meta.do");
-    die "order is required for group(): $spool_id" unless $meta->{order};
-    my $rows = do "$dir/rows.do";
-    die "invalid spool data for $spool_id: $@" if $@;
-    die "invalid spool data for $spool_id" unless defined $rows;
+    _run_in_fork($dir, sub {
+        my $meta = _read_do("$dir/meta.do");
+        die "order is required for group(): $spool_id" unless $meta->{order};
+        my $rows = do "$dir/rows.do";
+        die "invalid spool data for $spool_id: $@" if $@;
+        die "invalid spool data for $spool_id" unless defined $rows;
 
-    # Phase 1: validate and group in memory (die here leaves no partial state)
-    my $items;
-    if (@$rows) {
-        my $table;
-        # attrs が空ハッシュの場合は未設定扱いとして自動型検出ルートを使う
-        if ($meta->{attrs} && %{ $meta->{attrs} }) {
-            $table = attach($rows, { '#' => { attrs => $meta->{attrs}, order => $meta->{order} } });
-            $table = validate($table);
+        my $items;
+        if (@$rows) {
+            my $table;
+            if ($meta->{attrs} && %{ $meta->{attrs} }) {
+                $table = attach($rows, { '#' => { attrs => $meta->{attrs}, order => $meta->{order} } });
+                $table = validate($table);
+            } else {
+                $table = validate($rows, $meta->{order});
+            }
+            my $grouped = TableTools::group($table, @groups);
+            ($items) = detach($grouped);
         } else {
-            $table = validate($rows, $meta->{order});
+            $items = [];
         }
-        my $grouped = TableTools::group($table, @groups);
-        ($items) = detach($grouped);
-    } else {
-        $items = [];
-    }
 
-    # Phase 2: write atomically via items_tmp/ → items/
-    my $items_tmp = "$dir/items_tmp";
-    remove_tree($items_tmp) if -d $items_tmp;
-    mkdir $items_tmp or die "Cannot create items_tmp/: $!";
-    my $count = 0;
-    for my $item (@$items) {
-        _write_do(sprintf('%s/%08d.do', $items_tmp, $count), $item);
-        $count++;
-    }
-    rename $items_tmp, "$dir/items" or die "Cannot rename items: $!";
-    $meta->{mode}   = 'group';
-    $meta->{count}  = $count;
-    $meta->{groups} = \@groups;
-    _write_do("$dir/meta.do", $meta);
-    unlink "$dir/rows.do";
-    return $count;
+        my $items_tmp = "$dir/items_tmp";
+        remove_tree($items_tmp) if -d $items_tmp;
+        mkdir $items_tmp or die "Cannot create items_tmp/: $!";
+        my $count = 0;
+        for my $item (@$items) {
+            _write_do(sprintf('%s/%08d.do', $items_tmp, $count), $item);
+            $count++;
+        }
+        rename $items_tmp, "$dir/items" or die "Cannot rename items: $!";
+        $meta->{mode}   = 'group';
+        $meta->{count}  = $count;
+        $meta->{groups} = \@groups;
+        _write_do("$dir/meta.do", $meta);
+        unlink "$dir/rows.do";
+    });
+    my $meta = _read_do("$dir/meta.do");
+    return $meta->{count};
 }
 
 sub count {
