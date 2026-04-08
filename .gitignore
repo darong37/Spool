@@ -34,3 +34,4 @@ docs/superpowers/
 .claude/worktrees/
 .claude/commands/
 .claude/settings.json
+AGENTS.md
