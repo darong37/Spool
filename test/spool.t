@@ -562,23 +562,45 @@ subtest 'group() single-level produces grouped items' => sub {
     cleanup();
     my $spool = Spool->open('test001');
     $spool->meta({ order => ['file', 'line', 'text'], attrs => {} });
-    # extra は order に含まれないため子から除外される
-    $spool->add({ file => 'a.txt', line => 1, text => 'hello', extra => 'ignored' });
+    $spool->add({ file => 'a.txt', line => 1, text => 'hello' });
     $spool->add({ file => 'a.txt', line => 2, text => 'world' });
     $spool->add({ file => 'b.txt', line => 1, text => 'xxx' });
     $spool->close();
     Spool::group('test001', ['file']);
-    is Spool::count('test001'), 2, 'count=2 groups';
+    is Spool::count('test001'), 2,       'count=2 groups';
     my $g0 = Spool::get('test001', 0);
-    is $g0->{file}, 'a.txt',           'group 0 file=a.txt';
-    is scalar @{ $g0->{'@'} }, 2,      'group 0 has 2 children';
-    is $g0->{'@'}[0]{line}, 1,         'child 0 line=1';
-    is $g0->{'@'}[0]{text}, 'hello',   'child 0 text=hello';
-    ok !exists $g0->{'@'}[0]{file},    'file key removed from child';
-    ok !exists $g0->{'@'}[0]{extra},   'col not in order excluded from child';
+    is $g0->{file}, 'a.txt',             'group 0 file=a.txt';
+    is scalar @{ $g0->{'@'} }, 2,        'group 0 has 2 children';
+    is $g0->{'@'}[0]{line}, 1,           'child 0 line=1';
+    is $g0->{'@'}[0]{text}, 'hello',     'child 0 text=hello';
+    ok !exists $g0->{'@'}[0]{file},      'file key removed from child';
     my $g1 = Spool::get('test001', 1);
-    is $g1->{file}, 'b.txt',           'group 1 file=b.txt';
-    is scalar @{ $g1->{'@'} }, 1,      'group 1 has 1 child';
+    is $g1->{file}, 'b.txt',             'group 1 file=b.txt';
+    is scalar @{ $g1->{'@'} }, 1,        'group 1 has 1 child';
+    cleanup();
+};
+
+subtest 'group() dies if row has column not in order' => sub {
+    cleanup();
+    my $spool = Spool->open('test001');
+    $spool->meta({ order => ['file', 'line'] });
+    $spool->add({ file => 'a.txt', line => 1, extra => 'unexpected' });
+    $spool->close();
+    eval { Spool::group('test001', ['file']) };
+    like $@, qr/column count mismatch|unexpected column/, 'dies when row has column not in order';
+    cleanup();
+};
+
+subtest 'group() confirms with 0 items on empty spool' => sub {
+    cleanup();
+    my $spool = Spool->open('test001');
+    $spool->meta({ order => ['file', 'line'] });
+    $spool->close();
+    my $count = Spool::group('test001', ['file']);
+    is $count, 0,                         '0 items confirmed';
+    is Spool::count('test001'), 0,        'count() returns 0';
+    ok -d "$BASE/test001/items",          'items/ exists';
+    ok !-f "$BASE/test001/rows.do",       'rows.do removed';
     cleanup();
 };
 
@@ -633,7 +655,7 @@ subtest 'group() dies if key column missing from row' => sub {
     $spool->add({ line => 1 }); # file がない
     $spool->close();
     eval { Spool::group('test001', ['file']) };
-    like $@, qr/key column .* not found/, 'dies on missing key col';
+    like $@, qr/column count mismatch|unexpected column|not found/, 'dies on missing key col';
     cleanup();
 };
 

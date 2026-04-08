@@ -4,6 +4,8 @@ use strict;
 use warnings;
 use Data::Dumper;
 use File::Path qw(remove_tree);
+use TableTools qw(validate detach attach);
+# TableTools::group は完全修飾で呼ぶ（Spool::group との衝突回避）
 
 my $BASE = '/tmp/spool';
 
@@ -138,53 +140,6 @@ sub records {
     return $count;
 }
 
-sub _build_group {
-    my ($rows, $order, @groups) = @_;
-    my $level_cols = $groups[0];
-    my @rest       = @groups[1 .. $#groups];
-    my %key_set    = map { $_ => 1 } @$level_cols;
-    my @result;
-    my ($current_key, @current_rows, %seen_keys);
-    for my $row (@$rows) {
-        for my $col (@$level_cols) {
-            die "key column '$col' not found in row" unless exists $row->{$col};
-        }
-        my $key = join "\0", map { $row->{$_} // '' } @$level_cols;
-        if (!defined $current_key) {
-            $current_key = $key;
-        } elsif ($key ne $current_key) {
-            push @result, _make_group_item(\@current_rows, $order, $level_cols, \%key_set, \@rest);
-            die "out of order: key reappeared" if $seen_keys{$key};
-            $seen_keys{$current_key} = 1;
-            $current_key = $key;
-            @current_rows = ();
-        }
-        push @current_rows, $row;
-    }
-    if (@current_rows) {
-        push @result, _make_group_item(\@current_rows, $order, $level_cols, \%key_set, \@rest);
-    }
-    return \@result;
-}
-
-sub _make_group_item {
-    my ($rows, $order, $level_cols, $key_set, $rest) = @_;
-    my $head = $rows->[0];
-    my %item = map { $_ => $head->{$_} } @$level_cols;
-    my @non_key_cols = grep { !$key_set->{$_} } @$order;
-    my @children = map {
-        my $row = $_;
-        my %child = map { $_ => $row->{$_} } grep { exists $row->{$_} } @non_key_cols;
-        \%child;
-    } @$rows;
-    if (@$rest) {
-        $item{'@'} = _build_group(\@children, $order, @$rest);
-    } else {
-        $item{'@'} = \@children;
-    }
-    return \%item;
-}
-
 sub group {
     my ($spool_id, @groups) = @_;
     my $dir = "$BASE/$spool_id";
@@ -194,14 +149,29 @@ sub group {
     my $rows = do "$dir/rows.do";
     die "invalid spool data for $spool_id: $@" if $@;
     die "invalid spool data for $spool_id" unless defined $rows;
-    my $grouped = _build_group($rows, $meta->{order}, @groups);
 
-    # Write atomically via items_tmp/ → items/
+    # Phase 1: validate and group in memory (die here leaves no partial state)
+    my $items;
+    if (@$rows) {
+        my $table;
+        if ($meta->{attrs} && %{ $meta->{attrs} }) {
+            $table = attach($rows, { '#' => { attrs => $meta->{attrs}, order => $meta->{order} } });
+            $table = validate($table);
+        } else {
+            $table = validate($rows, $meta->{order});
+        }
+        my $grouped = TableTools::group($table, @groups);
+        ($items) = detach($grouped);
+    } else {
+        $items = [];
+    }
+
+    # Phase 2: write atomically via items_tmp/ → items/
     my $items_tmp = "$dir/items_tmp";
     remove_tree($items_tmp) if -d $items_tmp;
     mkdir $items_tmp or die "Cannot create items_tmp/: $!";
     my $count = 0;
-    for my $item (@$grouped) {
+    for my $item (@$items) {
         _write_do(sprintf('%s/%08d.do', $items_tmp, $count), $item);
         $count++;
     }
