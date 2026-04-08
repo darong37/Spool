@@ -132,48 +132,51 @@ sub records {
     my ($spool_id, @key_cols) = @_;
     my $dir = "$BASE/$spool_id";
     die "already confirmed: $spool_id" if -d "$dir/items";
-    my $rows = do "$dir/rows.do";
-    die "invalid spool data for $spool_id: $@" if $@;
-    die "invalid spool data for $spool_id" unless defined $rows;
+    _run_in_fork($dir, sub {
+        my $rows = do "$dir/rows.do";
+        die "invalid spool data for $spool_id: $@" if $@;
+        die "invalid spool data for $spool_id" unless defined $rows;
+        my $meta = _read_do("$dir/meta.do");
+
+        # キー列の存在を事前確認（エラーメッセージを保証する）
+        for my $row (@$rows) {
+            for my $col (@key_cols) {
+                die "key column '$col' not found in row" unless exists $row->{$col};
+            }
+        }
+
+        # TableTools で 1 段階グルーピング（非連続再出現は TableTools が die する）
+        my $table;
+        if ($meta->{attrs} && %{ $meta->{attrs} }) {
+            $table = attach($rows, { '#' => { attrs => $meta->{attrs}, order => $meta->{order} } });
+            $table = validate($table);
+        } else {
+            $table = validate($rows, $meta->{order});
+        }
+        my $grouped = TableTools::group($table, [@key_cols]);
+        my ($grouped_rows) = detach($grouped);
+
+        # 各グループのキー列値を子行にマージして item を構成する
+        my $items_tmp = "$dir/items_tmp";
+        remove_tree($items_tmp) if -d $items_tmp;
+        mkdir $items_tmp or die "Cannot create items_tmp/: $!";
+        my $count = 0;
+        for my $g (@$grouped_rows) {
+            my %key_vals = map { $_ => $g->{$_} } @key_cols;
+            my @item = map { { %key_vals, %$_ } } @{ $g->{'@'} };
+            _write_do(sprintf('%s/%08d.do', $items_tmp, $count), \@item);
+            $count++;
+        }
+        rename $items_tmp, "$dir/items" or die "Cannot rename items: $!";
+
+        $meta->{mode}     = 'records';
+        $meta->{count}    = $count;
+        $meta->{key_cols} = \@key_cols;
+        _write_do("$dir/meta.do", $meta);
+        unlink "$dir/rows.do";
+    });
     my $meta = _read_do("$dir/meta.do");
-
-    # Phase 1: validate and group in memory (die here leaves no partial state)
-    my (@groups, $current_key, @current_group, %seen_keys);
-    for my $row (@$rows) {
-        for my $col (@key_cols) {
-            die "key column '$col' not found in row" unless exists $row->{$col};
-        }
-        my $key = join "\0", map { $row->{$_} // '' } @key_cols;
-        if (!defined $current_key) {
-            $current_key = $key;
-        } elsif ($key ne $current_key) {
-            push @groups, [@current_group];
-            die "out of order: key reappeared" if $seen_keys{$key};
-            $seen_keys{$current_key} = 1;
-            $current_key = $key;
-            @current_group = ();
-        }
-        push @current_group, $row;
-    }
-    push @groups, [@current_group] if @current_group;
-
-    # Phase 2: write atomically via items_tmp/ → items/
-    my $items_tmp = "$dir/items_tmp";
-    remove_tree($items_tmp) if -d $items_tmp;
-    mkdir $items_tmp or die "Cannot create items_tmp/: $!";
-    my $count = 0;
-    for my $group (@groups) {
-        _write_do(sprintf('%s/%08d.do', $items_tmp, $count), $group);
-        $count++;
-    }
-    rename $items_tmp, "$dir/items" or die "Cannot rename items: $!";
-
-    $meta->{mode}     = 'records';
-    $meta->{count}    = $count;
-    $meta->{key_cols} = \@key_cols;
-    _write_do("$dir/meta.do", $meta);
-    unlink "$dir/rows.do";
-    return $count;
+    return $meta->{count};
 }
 
 sub group {
