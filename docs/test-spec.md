@@ -21,15 +21,17 @@ meta.do は close() で部分形として書かれ、モード確定後に完全
 | # | テスト名 | 確認内容 |
 |---|---|---|
 | 4 | add and close write rows.do correctly | close 後も rows.do が存在する / 行数が正しい / 各行の値が正しい |
-| 5 | close() without meta() writes empty meta.do | meta() なしで close() すると meta.do が `{}` （空ハッシュ）で作られる |
-| 6 | close() with meta() writes partial meta.do | meta() ありで close() すると meta.do に order / attrs のみが入り、count / mode はまだ存在しない |
+| 5 | close() without meta() writes partial meta.do with count only | meta() なしで close() すると meta.do に count（行数）のみが含まれる（order・attrs・mode なし） |
+| 6 | close() with meta() writes partial meta.do | meta() ありで close() すると meta.do に order / attrs / count（行数）が入り、mode はまだ存在しない |
 
 ### meta()
 
 | # | テスト名 | 確認内容 |
 |---|---|---|
-| 7 | meta() stores order and attrs in meta.do after close | close 後の meta.do に order / attrs が保存される |
-| 8 | meta() dies if called after add() | add() 後に meta() を呼ぶと die |
+| 7  | meta() stores order and attrs in meta.do after close    | close 後の meta.do に order / attrs が保存される |
+| 8  | meta() can be called after add()                        | add() 後に meta() を呼んでも die せず、close() 後の meta.do に order が反映される |
+| 8a | close() warns on 0 rows                                 | add() を一度も呼ばずに close() すると warn が出る（die はしない）。meta.do の count は 0 |
+| 8b | close() writes row count to partial meta.do             | add() を N 回呼んで close() すると partial meta.do の count が N になる |
 
 ### Spool::lines()
 
