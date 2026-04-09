@@ -58,19 +58,19 @@ subtest 'add and close write rows.do correctly' => sub {
     cleanup();
 };
 
-subtest 'close() without meta() writes empty meta.do' => sub {
+subtest 'close() without meta() writes partial meta.do with count only' => sub {
     cleanup();
     my $spool = Spool->open('test001');
     $spool->add({ a => 1 });
     $spool->close();
     my $meta = do "$BASE/test001/meta.do";
-    is_deeply $meta, {}, 'meta.do is empty hash without meta()';
-    ok !exists $meta->{count}, 'no count in partial meta.do';
-    ok !exists $meta->{mode},  'no mode in partial meta.do';
+    is $meta->{count}, 1,          'count=1 in partial meta.do';
+    ok !exists $meta->{order},     'no order in partial meta.do';
+    ok !exists $meta->{mode},      'no mode in partial meta.do';
     cleanup();
 };
 
-subtest 'close() with meta() writes partial meta.do (no count/mode)' => sub {
+subtest 'close() with meta() writes partial meta.do' => sub {
     cleanup();
     my $spool = Spool->open('test001');
     $spool->meta({ order => ['a', 'b'], attrs => { a => 'num' } });
@@ -79,7 +79,7 @@ subtest 'close() with meta() writes partial meta.do (no count/mode)' => sub {
     my $meta = do "$BASE/test001/meta.do";
     is_deeply $meta->{order}, ['a', 'b'], 'order in partial meta.do';
     is $meta->{attrs}{a}, 'num',          'attrs in partial meta.do';
-    ok !exists $meta->{count},            'no count in partial meta.do';
+    is $meta->{count}, 1,                 'count=1 in partial meta.do';
     ok !exists $meta->{mode},             'no mode in partial meta.do';
     cleanup();
 };
@@ -96,12 +96,38 @@ subtest 'meta() stores order and attrs in meta.do after close' => sub {
     cleanup();
 };
 
-subtest 'meta() dies if called after add()' => sub {
+subtest 'meta() can be called after add()' => sub {
     cleanup();
     my $spool = Spool->open('test001');
     $spool->add({ a => 1 });
-    eval { $spool->meta({ order => ['a'] }) };
-    like $@, qr/before add/, 'dies when called after add';
+    $spool->meta({ order => ['a'] });
+    $spool->close();
+    my $meta = do "$BASE/test001/meta.do";
+    is_deeply $meta->{order}, ['a'], 'order written when meta() called after add()';
+    cleanup();
+};
+
+subtest 'close() warns on 0 rows' => sub {
+    cleanup();
+    my $spool = Spool->open('test001');
+    my $warned = 0;
+    local $SIG{__WARN__} = sub { $warned++ };
+    $spool->close();
+    is $warned, 1,         'exactly one warning on 0-row close';
+    my $meta = do "$BASE/test001/meta.do";
+    is $meta->{count}, 0, 'count=0 in meta.do';
+    cleanup();
+};
+
+subtest 'close() writes row count to partial meta.do' => sub {
+    cleanup();
+    my $spool = Spool->open('test001');
+    $spool->add({ a => 1 });
+    $spool->add({ a => 2 });
+    $spool->add({ a => 3 });
+    $spool->close();
+    my $meta = do "$BASE/test001/meta.do";
+    is $meta->{count}, 3, 'count=3 reflects number of add() calls';
     cleanup();
 };
 
@@ -159,7 +185,7 @@ subtest 'lines() overwrites partial meta.do with complete form (with meta)' => s
     $spool->add({ a => 2 });
     $spool->close();
     my $partial = do "$BASE/test001/meta.do";
-    ok !exists $partial->{count}, 'no count before lines()';
+    is $partial->{count}, 2,      'count=2 (row count) in partial meta.do';
     ok !exists $partial->{mode},  'no mode before lines()';
     Spool::lines('test001');
     my $complete = do "$BASE/test001/meta.do";
