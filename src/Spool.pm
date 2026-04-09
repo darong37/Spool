@@ -78,7 +78,6 @@ sub open {
 
 sub meta {
     my ($self, $meta) = @_;
-    die "meta() must be called before add()" if $self->{added};
     $self->{meta} = $meta;
     return $self;
 }
@@ -95,7 +94,10 @@ sub close {
     my ($self) = @_;
     print { $self->{fh} } "]\n";
     CORE::close $self->{fh};
-    _write_do("$self->{dir}/meta.do", $self->{meta} // {});
+    warn "spool closed with 0 rows: $self->{spool_id}\n" if $self->{added} == 0;
+    my $meta = $self->{meta} // {};
+    $meta->{count} = $self->{added};
+    _write_do("$self->{dir}/meta.do", $meta);
     return $self;
 }
 
