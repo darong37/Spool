@@ -1,5 +1,36 @@
 package Spool;
 
+# Terms:
+# spool_id は spool を識別する文字列で、[A-Za-z0-9]+ のみを許可する
+# spool は /tmp/spool/<spool_id>/ に作られる 1 件分の退避領域
+# write フェーズは親プロセスが open() / meta() / add() / close() を行う段階
+# confirm フェーズは親とは別の fork プロセスが lines() / records() / group() を行う段階
+# read フェーズは count() / get() / remove() で確定済み item を扱う段階
+# rows.do は write フェーズで蓄積する全行データ
+# meta.do は close() 後は部分形、confirm 後は完全形を持つ
+# items/ は confirm 後の公開データ置き場
+# lines モードは 1 行を 1 item として確定する
+# records モードは同じキー値を持つ連続行を 1 item にまとめて確定する
+# group モードは TableTools::validate / TableTools::group / TableTools::detach に委譲して階層 item を作る
+#
+# Rules:
+# 親プロセスは write だけを担当し、全件読み込みや item ファイル生成をしてはいけない
+# confirm は必ず親とは別の fork プロセスで行う
+# プロセス間で受け渡すものはオブジェクトではなく spool_id 文字列だけにする
+# confirm の入力となる rows は TableTools::validate を通せるのと同等の前提を満たしていなければならない
+# 各 row は同じキー集合を持たなければならない
+# row の undef 値は confirm 前に空文字へ正規化されていなければならない
+# records() と group() に必要な並び順は呼び出し側が事前に整えておかなければならない
+# records() は入力順をそのまま走査し、非連続な同一キーの再出現をエラーにする
+# group() はできる限り TableTools を利用して構造化し、Spool 自体は退避と確定の責務に寄せる
+# write 中の中間状態と confirm 後の公開状態は分けて扱う
+# confirm 失敗時に壊れた items/ を公開してはいけない
+# read フェーズの参照単位は spool_id と index に固定する
+# confirm の 3 関数（lines/records/group）は全て fork した子プロセス内で実行する
+# 親プロセスは fork 後に全件読み込みや item 生成を行ってはいけない
+# 親プロセスは waitpid で子の正常終了を確認してから結果を参照する
+# 子プロセスが正常終了しなかった場合は confirm 失敗として扱う
+
 use strict;
 use warnings;
 use Data::Dumper;
