@@ -749,4 +749,31 @@ subtest 'lines() cleans up stale items_tmp/ from previous failed run' => sub {
     cleanup();
 };
 
+subtest 'records() cleans up stale items_tmp/ from previous failed run' => sub {
+    cleanup();
+    my $spool = Spool->open('test001');
+    $spool->add({ file => 'a.txt', line => 1 });
+    $spool->close();
+    mkdir "$BASE/test001/items_tmp";
+    open my $fh, '>', "$BASE/test001/items_tmp/stale.do"; CORE::close $fh;
+    Spool::records('test001', 'file');
+    ok  -d  "$BASE/test001/items",     'items/ created';
+    ok  !-d "$BASE/test001/items_tmp", 'items_tmp/ cleaned up after records()';
+    cleanup();
+};
+
+subtest 'group() cleans up stale items_tmp/ from previous failed run' => sub {
+    cleanup();
+    my $spool = Spool->open('test001');
+    $spool->meta({ order => ['file', 'line'], attrs => {} });
+    $spool->add({ file => 'a.txt', line => 1 });
+    $spool->close();
+    mkdir "$BASE/test001/items_tmp";
+    open my $fh, '>', "$BASE/test001/items_tmp/stale.do"; CORE::close $fh;
+    Spool::group('test001', ['file']);
+    ok  -d  "$BASE/test001/items",     'items/ created';
+    ok  !-d "$BASE/test001/items_tmp", 'items_tmp/ cleaned up after group()';
+    cleanup();
+};
+
 done_testing;

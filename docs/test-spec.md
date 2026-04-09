@@ -45,6 +45,9 @@ meta.do は close() で部分形として書かれ、モード確定後に完全
 | 14 | lines() dies on invalid spool data | 不正な rows.do（`]` なし）に対して die |
 | 14a | records() dies on invalid spool data | 不正な rows.do（`]` なし）に対して die |
 | 14b | group() dies on invalid spool data | 不正な rows.do（`]` なし）に対して die |
+| 14c | lines() cleans up stale items_tmp/ from previous failed run | 前回の失敗で `items_tmp/` が残っていても lines() が正常に確定できる / 完了後 `items_tmp/` が削除される |
+| 14d | records() cleans up stale items_tmp/ from previous failed run | 前回の失敗で `items_tmp/` が残っていても records() が正常に確定できる / 完了後 `items_tmp/` が削除される |
+| 14e | group() cleans up stale items_tmp/ from previous failed run | 前回の失敗で `items_tmp/` が残っていても group() が正常に確定できる / 完了後 `items_tmp/` が削除される |
 
 ### Spool::count()
 
@@ -69,8 +72,8 @@ meta.do は close() で部分形として書かれ、モード確定後に完全
 
 | # | テスト名 | 確認内容 |
 |---|---|---|
-| 24 | remove() deletes confirmed spool directory | 確定済み spool のディレクトリが削除される |
-| 25 | remove() deletes unconfirmed spool directory | 未確定 spool（close 済み・lines() 前）のディレクトリも削除できる |
+| 24 | remove() deletes unconfirmed spool directory | 未確定 spool（close 済み・lines() 前）のディレクトリも削除できる |
+| 25 | remove() deletes spool directory | 確定済み spool のディレクトリが削除される |
 
 ### Spool::records()
 
