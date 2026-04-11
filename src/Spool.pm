@@ -263,7 +263,9 @@ sub group {
 sub count {
     my ($spool_id) = @_;
     my $dir = "$BASE/$spool_id";
-    die "spool not confirmed: $spool_id" if -f "$dir/rows.do";
+    my $spool = _read_do("$dir/spool.do");
+    die "spool not ready: $spool_id" unless $spool->{ready};
+    return 0 if $spool->{empty};
     my $meta = _read_do("$dir/meta.do");
     return $meta->{count};
 }
@@ -271,7 +273,9 @@ sub count {
 sub get {
     my ($spool_id, $i) = @_;
     my $dir = "$BASE/$spool_id";
-    die "spool not confirmed: $spool_id" if -f "$dir/rows.do";
+    my $spool = _read_do("$dir/spool.do");
+    die "spool not ready: $spool_id" unless $spool->{ready};
+    die "index out of range: $i (empty spool)" if $spool->{empty};
     my $meta = _read_do("$dir/meta.do");
     die "index out of range: $i (count=$meta->{count})"
         unless defined $i && $i >= 0 && $i < $meta->{count};

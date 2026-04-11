@@ -313,13 +313,24 @@ subtest 'count() returns top-level group count after group()' => sub {
     cleanup();
 };
 
+subtest 'count() returns 0 for empty spool (no items/)' => sub {
+    cleanup();
+    my $spool = Spool->open('test001');
+    $spool->meta({ order => ['file', 'line'] });
+    $spool->close();
+    Spool::group('test001', ['file']);
+    ok !-d "$BASE/test001/items", 'no items/ dir';
+    is Spool::count('test001'), 0, 'count() returns 0 without items/';
+    cleanup();
+};
+
 subtest 'count() dies if not yet confirmed' => sub {
     cleanup();
     my $spool = Spool->open('test001');
     $spool->add({ a => 1 });
     $spool->close();
     eval { Spool::count('test001') };
-    like $@, qr/not confirmed/, 'dies before mode confirm';
+    like $@, qr/not ready/, 'dies before mode confirm';
     cleanup();
 };
 
@@ -386,7 +397,7 @@ subtest 'get() dies if not confirmed' => sub {
     $spool->add({ a => 1 });
     $spool->close();
     eval { Spool::get('test001', 0) };
-    like $@, qr/not confirmed/, 'dies before mode confirm';
+    like $@, qr/not ready/, 'dies before mode confirm';
     cleanup();
 };
 
