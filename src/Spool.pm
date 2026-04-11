@@ -140,7 +140,7 @@ sub lines {
     my ($spool_id) = @_;
     my $dir = "$BASE/$spool_id";
     my $spool_state = _read_do("$dir/spool.do");
-    die "already confirmed: $spool_id" if $spool_state->{ready} || -d "$dir/items";
+    die "already confirmed: $spool_id" if $spool_state->{ready} || -d "$dir/items"; # items/ check removed in Task4
     _run_in_fork($dir, sub {
         my $rows = do "$dir/rows.do";
         die "invalid spool data for $spool_id: $@" if $@;
