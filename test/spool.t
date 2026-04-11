@@ -7,6 +7,15 @@ my $BASE = '/tmp/spool';
 
 sub cleanup { remove_tree("$BASE/test001") if -d "$BASE/test001" }
 
+sub slurp_utf8 {
+    my ($path) = @_;
+    open my $fh, '<:encoding(UTF-8)', $path or die "Cannot read $path: $!";
+    local $/;
+    my $content = <$fh>;
+    CORE::close $fh;
+    return $content;
+}
+
 use_ok 'Spool';
 
 subtest 'open creates directory and rows.do' => sub {
@@ -121,6 +130,43 @@ subtest 'meta() can be called after add()' => sub {
     cleanup();
 };
 
+subtest 'meta() keeps the last hashref passed' => sub {
+    cleanup();
+    my $spool = Spool->open('test001');
+    $spool->meta({ order => ['a'], attrs => { a => 'num' } });
+    $spool->meta({ order => ['b'], attrs => { b => 'str' } });
+    $spool->add({ b => 'x' });
+    $spool->close();
+    my $meta = do "$BASE/test001/meta.do";
+    is_deeply $meta->{order}, ['b'],           'last order wins';
+    is_deeply $meta->{attrs}, { b => 'str' },  'last attrs wins';
+    cleanup();
+};
+
+subtest 'meta() dies unless meta is hashref' => sub {
+    cleanup();
+    my $spool = Spool->open('test001');
+    eval { $spool->meta('bad') };
+    like $@, qr/meta must be hashref/, 'dies on scalar meta';
+    cleanup();
+};
+
+subtest 'meta() dies unless attrs is hashref' => sub {
+    cleanup();
+    my $spool = Spool->open('test001');
+    eval { $spool->meta({ attrs => 'bad' }) };
+    like $@, qr/meta attrs must be hashref/, 'dies on scalar attrs';
+    cleanup();
+};
+
+subtest 'meta() dies unless order is arrayref' => sub {
+    cleanup();
+    my $spool = Spool->open('test001');
+    eval { $spool->meta({ order => 'bad' }) };
+    like $@, qr/meta order must be arrayref/, 'dies on scalar order';
+    cleanup();
+};
+
 subtest 'close() warns on 0 rows' => sub {
     cleanup();
     my $spool = Spool->open('test001');
@@ -228,8 +274,8 @@ subtest 'lines() dies if already confirmed' => sub {
     like $@, qr/already confirmed/, 'lines() dies on re-confirm';
     eval { Spool::records('test001', 'a') };
     like $@, qr/already confirmed/, 'records() dies on already-lines spool';
-    eval { Spool::group('test001', ['a']) };
-    like $@, qr/already confirmed/, 'group() dies on already-lines spool';
+    eval { Spool::grouping('test001', ['a']) };
+    like $@, qr/already confirmed/, 'grouping() dies on already-lines spool';
     cleanup();
 };
 
@@ -238,13 +284,12 @@ subtest 'lines() dies on invalid spool data' => sub {
     my $spool = Spool->open('test001');
     $spool->add({ a => 1 });
     # close() を呼ばずに rows.do を直接壊す
-    CORE::close $spool->{fh};
     open my $fh, '>:encoding(UTF-8)', "$BASE/test001/rows.do";
     print $fh "[ { a => 1 },\n";  # ] がない不正データ
     CORE::close $fh;
-    Spool::_write_do("$BASE/test001/meta.do", {});
+    CommonIO::write_do("$BASE/test001/meta.do", {});
     eval { Spool::lines('test001') };
-    like $@, qr/invalid spool data/, 'dies on broken rows.do';
+    like $@, qr/confirm failed/, 'dies on broken rows.do';
     cleanup();
 };
 
@@ -252,27 +297,25 @@ subtest 'records() dies on invalid spool data' => sub {
     cleanup();
     my $spool = Spool->open('test001');
     $spool->add({ file => 'a.txt' });
-    CORE::close $spool->{fh};
     open my $fh, '>:encoding(UTF-8)', "$BASE/test001/rows.do";
     print $fh "[ { file => 'a.txt' },\n";  # ] がない不正データ
     CORE::close $fh;
-    Spool::_write_do("$BASE/test001/meta.do", {});
+    CommonIO::write_do("$BASE/test001/meta.do", {});
     eval { Spool::records('test001', 'file') };
-    like $@, qr/invalid spool data/, 'records() dies on broken rows.do';
+    like $@, qr/confirm failed/, 'records() dies on broken rows.do';
     cleanup();
 };
 
-subtest 'group() dies on invalid spool data' => sub {
+subtest 'grouping() dies on invalid spool data' => sub {
     cleanup();
     my $spool = Spool->open('test001');
     $spool->add({ file => 'a.txt' });
-    CORE::close $spool->{fh};
     open my $fh, '>:encoding(UTF-8)', "$BASE/test001/rows.do";
     print $fh "[ { file => 'a.txt' },\n";  # ] がない不正データ
     CORE::close $fh;
-    Spool::_write_do("$BASE/test001/meta.do", { order => ['file'] });
-    eval { Spool::group('test001', ['file']) };
-    like $@, qr/invalid spool data/, 'group() dies on broken rows.do';
+    CommonIO::write_do("$BASE/test001/meta.do", { order => ['file'] });
+    eval { Spool::grouping('test001', ['file']) };
+    like $@, qr/confirm failed/, 'grouping() dies on broken rows.do';
     cleanup();
 };
 
@@ -300,7 +343,7 @@ subtest 'count() returns group count after records()' => sub {
     cleanup();
 };
 
-subtest 'count() returns top-level group count after group()' => sub {
+subtest 'count() returns top-level group count after grouping()' => sub {
     cleanup();
     my $spool = Spool->open('test001');
     $spool->meta({ order => ['file', 'line'], attrs => {} });
@@ -308,8 +351,8 @@ subtest 'count() returns top-level group count after group()' => sub {
     $spool->add({ file => 'a.txt', line => 2 });
     $spool->add({ file => 'b.txt', line => 1 });
     $spool->close();
-    Spool::group('test001', ['file']);
-    is Spool::count('test001'), 2, 'count=2 top-level groups after group()';
+    Spool::grouping('test001', ['file']);
+    is Spool::count('test001'), 2, 'count=2 top-level groups after grouping()';
     cleanup();
 };
 
@@ -318,7 +361,7 @@ subtest 'count() returns 0 for empty spool (no items/)' => sub {
     my $spool = Spool->open('test001');
     $spool->meta({ order => ['file', 'line'] });
     $spool->close();
-    Spool::group('test001', ['file']);
+    Spool::grouping('test001', ['file']);
     ok !-d "$BASE/test001/items", 'no items/ dir';
     is Spool::count('test001'), 0, 'count() returns 0 without items/';
     cleanup();
@@ -363,16 +406,16 @@ subtest 'get() returns correct group after records()' => sub {
     cleanup();
 };
 
-subtest 'get() returns correct group after group()' => sub {
+subtest 'get() returns correct group after grouping()' => sub {
     cleanup();
     my $spool = Spool->open('test001');
     $spool->meta({ order => ['file', 'line', 'text'], attrs => {} });
     $spool->add({ file => 'a.txt', line => 1, text => 'hello' });
     $spool->add({ file => 'a.txt', line => 2, text => 'world' });
     $spool->close();
-    Spool::group('test001', ['file']);
+    Spool::grouping('test001', ['file']);
     my $g = Spool::get('test001', 0);
-    is ref($g), 'HASH',          'get() returns hashref after group()';
+    is ref($g), 'HASH',          'get() returns hashref after grouping()';
     is $g->{file}, 'a.txt',      'group file=a.txt';
     is scalar @{ $g->{'@'} }, 2, 'group has 2 children';
     cleanup();
@@ -535,8 +578,8 @@ subtest 'records() dies if already confirmed' => sub {
     Spool::records('test001', 'file');
     eval { Spool::records('test001', 'file') };
     like $@, qr/already confirmed/, 'records() dies on re-confirm';
-    eval { Spool::group('test001', ['file']) };
-    like $@, qr/already confirmed/, 'group() dies on already-records spool';
+    eval { Spool::grouping('test001', ['file']) };
+    like $@, qr/already confirmed/, 'grouping() dies on already-records spool';
     cleanup();
 };
 
@@ -548,7 +591,7 @@ subtest 'records() dies on out-of-order key' => sub {
     $spool->add({ file => 'a.txt', line => 2 }); # a.txt が再出現
     $spool->close();
     eval { Spool::records('test001', 'file') };
-    like $@, qr/out of order/, 'dies on key reappearance';
+    like $@, qr/confirm failed/, 'dies on key reappearance';
     cleanup();
 };
 
@@ -558,7 +601,7 @@ subtest 'records() dies if key column missing from row' => sub {
     $spool->add({ line => 1 }); # file がない
     $spool->close();
     eval { Spool::records('test001', 'file') };
-    like $@, qr/key column .* not found/, 'dies on missing key col';
+    like $@, qr/confirm failed/, 'dies on missing key col';
     cleanup();
 };
 
@@ -576,7 +619,7 @@ subtest 'records() supports multi-column key' => sub {
     cleanup();
 };
 
-subtest 'group() confirms by spool_id only (no object)' => sub {
+subtest 'grouping() confirms by spool_id only (no object)' => sub {
     cleanup();
     {
         my $spool = Spool->open('test001');
@@ -585,19 +628,19 @@ subtest 'group() confirms by spool_id only (no object)' => sub {
         $spool->add({ file => 'b.txt', line => 1 });
         $spool->close();
     }
-    Spool::group('test001', ['file']);
+    Spool::grouping('test001', ['file']);
     is Spool::count('test001'), 2, 'confirmed by spool_id only';
     cleanup();
 };
 
-subtest 'group() creates items/ and removes rows.do' => sub {
+subtest 'grouping() creates items/ and removes rows.do' => sub {
     cleanup();
     my $spool = Spool->open('test001');
     $spool->meta({ order => ['file', 'line'], attrs => {} });
     $spool->add({ file => 'a.txt', line => 1 });
     $spool->add({ file => 'b.txt', line => 1 });
     $spool->close();
-    Spool::group('test001', ['file']);
+    Spool::grouping('test001', ['file']);
     ok -d  "$BASE/test001/items",             'items/ created';
     ok -f  "$BASE/test001/items/00000000.do", 'item 0 exists';
     ok -f  "$BASE/test001/items/00000001.do", 'item 1 exists';
@@ -605,7 +648,7 @@ subtest 'group() creates items/ and removes rows.do' => sub {
     cleanup();
 };
 
-subtest 'group() preserves input order within and across groups' => sub {
+subtest 'grouping() preserves input order within and across groups' => sub {
     cleanup();
     my $spool = Spool->open('test001');
     $spool->meta({ order => ['file', 'line'], attrs => {} });
@@ -614,7 +657,7 @@ subtest 'group() preserves input order within and across groups' => sub {
     $spool->add({ file => 'b.txt', line => 1 });
     $spool->add({ file => 'a.txt', line => 3 });
     $spool->close();
-    Spool::group('test001', ['file']);
+    Spool::grouping('test001', ['file']);
     my $g0 = Spool::get('test001', 0);
     my $g1 = Spool::get('test001', 1);
     is $g0->{file},            'b.txt', 'first group is b.txt (input order preserved)';
@@ -624,7 +667,7 @@ subtest 'group() preserves input order within and across groups' => sub {
     cleanup();
 };
 
-subtest 'group() single-level produces grouped items' => sub {
+subtest 'grouping() single-level produces grouped items' => sub {
     cleanup();
     my $spool = Spool->open('test001');
     $spool->meta({ order => ['file', 'line', 'text'], attrs => {} });
@@ -632,7 +675,7 @@ subtest 'group() single-level produces grouped items' => sub {
     $spool->add({ file => 'a.txt', line => 2, text => 'world' });
     $spool->add({ file => 'b.txt', line => 1, text => 'xxx' });
     $spool->close();
-    Spool::group('test001', ['file']);
+    Spool::grouping('test001', ['file']);
     is Spool::count('test001'), 2,       'count=2 groups';
     my $g0 = Spool::get('test001', 0);
     is $g0->{file}, 'a.txt',             'group 0 file=a.txt';
@@ -646,65 +689,65 @@ subtest 'group() single-level produces grouped items' => sub {
     cleanup();
 };
 
-subtest 'group() dies if row has column not in order' => sub {
+subtest 'grouping() dies if row has column not in order' => sub {
     cleanup();
     my $spool = Spool->open('test001');
     $spool->meta({ order => ['file', 'line'] });
     $spool->add({ file => 'a.txt', line => 1, extra => 'unexpected' });
     $spool->close();
-    eval { Spool::group('test001', ['file']) };
-    like $@, qr/column count mismatch|unexpected column/, 'dies when row has column not in order';
+    eval { Spool::grouping('test001', ['file']) };
+    like $@, qr/confirm failed/, 'dies when row has column not in order';
     cleanup();
 };
 
-subtest 'group() confirms with 0 items on empty spool' => sub {
+subtest 'grouping() confirms with 0 items on empty spool' => sub {
     cleanup();
     my $spool = Spool->open('test001');
     $spool->meta({ order => ['file', 'line'] });
     $spool->close();
-    my $count = Spool::group('test001', ['file']);
+    my $count = Spool::grouping('test001', ['file']);
     is $count, 0,                          '0 items confirmed';
     ok !-d "$BASE/test001/items",          'items/ not created for 0 results';
     ok !-f "$BASE/test001/rows.do",        'rows.do removed';
     my $state = do "$BASE/test001/spool.do";
     is $state->{ready}, 1,       'ready=1 in spool.do';
     is $state->{empty}, 1,       'empty=1 in spool.do';
-    is $state->{mode},  'group', 'mode=group in spool.do';
+    is $state->{mode},  'grouping', 'mode=grouping in spool.do';
     cleanup();
 };
 
-subtest 'group() works with order only (no attrs in meta)' => sub {
+subtest 'grouping() works with order only (no attrs in meta)' => sub {
     cleanup();
     my $spool = Spool->open('test001');
     $spool->meta({ order => ['file', 'line'] }); # attrs なし
     $spool->add({ file => 'a.txt', line => 1 });
     $spool->add({ file => 'b.txt', line => 1 });
     $spool->close();
-    Spool::group('test001', ['file']);
-    is Spool::count('test001'), 2, 'group() works without attrs';
+    Spool::grouping('test001', ['file']);
+    is Spool::count('test001'), 2, 'grouping() works without attrs';
     cleanup();
 };
 
-subtest 'group() dies if order not in meta' => sub {
+subtest 'grouping() dies if order not in meta' => sub {
     # meta() なし
     cleanup();
     my $spool = Spool->open('test001');
     $spool->add({ file => 'a.txt', line => 1 });
     $spool->close();
-    eval { Spool::group('test001', ['file']) };
-    like $@, qr/order.*required/, 'dies without order in meta';
+    eval { Spool::grouping('test001', ['file']) };
+    like $@, qr/confirm failed/, 'dies without order in meta';
     cleanup();
     # meta() で attrs のみ指定した場合も die
     my $spool2 = Spool->open('test001');
     $spool2->meta({ attrs => { file => 'str' } }); # order なし
     $spool2->add({ file => 'a.txt' });
     $spool2->close();
-    eval { Spool::group('test001', ['file']) };
-    like $@, qr/order.*required/, 'dies with attrs but no order in meta';
+    eval { Spool::grouping('test001', ['file']) };
+    like $@, qr/confirm failed/, 'dies with attrs but no order in meta';
     cleanup();
 };
 
-subtest 'group() dies on out-of-order key' => sub {
+subtest 'grouping() dies on out-of-order key' => sub {
     cleanup();
     my $spool = Spool->open('test001');
     $spool->meta({ order => ['file', 'line'], attrs => {} });
@@ -712,23 +755,23 @@ subtest 'group() dies on out-of-order key' => sub {
     $spool->add({ file => 'b.txt', line => 1 });
     $spool->add({ file => 'a.txt', line => 2 }); # a.txt 再出現
     $spool->close();
-    eval { Spool::group('test001', ['file']) };
-    like $@, qr/out of order/, 'dies on key reappearance';
+    eval { Spool::grouping('test001', ['file']) };
+    like $@, qr/confirm failed/, 'dies on key reappearance';
     cleanup();
 };
 
-subtest 'group() dies if key column missing from row' => sub {
+subtest 'grouping() dies if key column missing from row' => sub {
     cleanup();
     my $spool = Spool->open('test001');
     $spool->meta({ order => ['file', 'line'], attrs => {} });
     $spool->add({ line => 1 }); # file がない
     $spool->close();
-    eval { Spool::group('test001', ['file']) };
-    like $@, qr/column count mismatch|unexpected column|not found/, 'dies on missing key col';
+    eval { Spool::grouping('test001', ['file']) };
+    like $@, qr/confirm failed/, 'dies on missing key col';
     cleanup();
 };
 
-subtest 'group() overwrites partial meta.do with complete form' => sub {
+subtest 'grouping() overwrites partial meta.do with complete form' => sub {
     cleanup();
     my $spool = Spool->open('test001');
     $spool->meta({ order => ['file', 'line'], attrs => {} });
@@ -736,11 +779,11 @@ subtest 'group() overwrites partial meta.do with complete form' => sub {
     $spool->add({ file => 'b.txt', line => 1 });
     $spool->close();
     my $partial = do "$BASE/test001/meta.do";
-    ok !exists $partial->{mode},   'no mode before group()';
-    ok !exists $partial->{groups}, 'no groups before group()';
-    Spool::group('test001', ['file']);
+    ok !exists $partial->{mode},   'no mode before grouping()';
+    ok !exists $partial->{groups}, 'no groups before grouping()';
+    Spool::grouping('test001', ['file']);
     my $complete = do "$BASE/test001/meta.do";
-    ok !exists $complete->{mode},                   'no mode in meta.do after group()';
+    ok !exists $complete->{mode},                   'no mode in meta.do after grouping()';
     is $complete->{count}, 2,                        'count=2 in complete meta.do';
     is_deeply $complete->{groups}, [['file']],       'groups in complete meta.do';
     is_deeply $complete->{order},  ['file', 'line'], 'order preserved in complete meta.do';
@@ -748,7 +791,7 @@ subtest 'group() overwrites partial meta.do with complete form' => sub {
     my $state = do "$BASE/test001/spool.do";
     is $state->{ready}, 1,       'ready=1 in spool.do';
     is $state->{empty}, 0,       'empty=0 in spool.do';
-    is $state->{mode},  'group', 'mode=group in spool.do';
+    is $state->{mode},  'grouping', 'mode=grouping in spool.do';
     cleanup();
 };
 
@@ -758,17 +801,17 @@ subtest 'all mode functions die if already confirmed (group mode)' => sub {
     $spool->meta({ order => ['file', 'line'], attrs => {} });
     $spool->add({ file => 'a.txt', line => 1 });
     $spool->close();
-    Spool::group('test001', ['file']);
+    Spool::grouping('test001', ['file']);
     eval { Spool::lines('test001') };
     like $@, qr/already confirmed/, 'lines() dies on already-group spool';
     eval { Spool::records('test001', 'file') };
     like $@, qr/already confirmed/, 'records() dies on already-group spool';
-    eval { Spool::group('test001', ['file']) };
-    like $@, qr/already confirmed/, 'group() dies on re-group spool';
+    eval { Spool::grouping('test001', ['file']) };
+    like $@, qr/already confirmed/, 'grouping() dies on re-group spool';
     cleanup();
 };
 
-subtest 'group() multi-level with single col per level' => sub {
+subtest 'grouping() multi-level with single col per level' => sub {
     cleanup();
     my $spool = Spool->open('test001');
     $spool->meta({ order => ['file', 'line', 'text'], attrs => {} });
@@ -776,7 +819,7 @@ subtest 'group() multi-level with single col per level' => sub {
     $spool->add({ file => 'a.txt', line => 2, text => 'world' });
     $spool->add({ file => 'b.txt', line => 1, text => 'xxx' });
     $spool->close();
-    Spool::group('test001', ['file'], ['line']);
+    Spool::grouping('test001', ['file'], ['line']);
     is Spool::count('test001'), 2, 'count=2 top-level groups';
     my $g0 = Spool::get('test001', 0);
     is $g0->{file}, 'a.txt',                  'g0 file=a.txt';
@@ -788,7 +831,7 @@ subtest 'group() multi-level with single col per level' => sub {
     cleanup();
 };
 
-subtest 'group() multi-level with multi-col first level' => sub {
+subtest 'grouping() multi-level with multi-col first level' => sub {
     cleanup();
     my $spool = Spool->open('test001');
     $spool->meta({ order => ['dir', 'file', 'line', 'text'], attrs => {} });
@@ -796,7 +839,7 @@ subtest 'group() multi-level with multi-col first level' => sub {
     $spool->add({ dir => '/src', file => 'a.txt', line => 2, text => 'world' });
     $spool->add({ dir => '/src', file => 'b.txt', line => 1, text => 'xxx' });
     $spool->close();
-    Spool::group('test001', ['dir', 'file'], ['line']);
+    Spool::grouping('test001', ['dir', 'file'], ['line']);
     is Spool::count('test001'), 2, 'count=2 (dir+file groups)';
     my $g0 = Spool::get('test001', 0);
     is $g0->{dir},  '/src',   'g0 dir=/src';
@@ -835,7 +878,7 @@ subtest 'records() cleans up stale items_tmp/ from previous failed run' => sub {
     cleanup();
 };
 
-subtest 'group() cleans up stale items_tmp/ from previous failed run' => sub {
+subtest 'grouping() cleans up stale items_tmp/ from previous failed run' => sub {
     cleanup();
     my $spool = Spool->open('test001');
     $spool->meta({ order => ['file', 'line'], attrs => {} });
@@ -843,9 +886,81 @@ subtest 'group() cleans up stale items_tmp/ from previous failed run' => sub {
     $spool->close();
     mkdir "$BASE/test001/items_tmp";
     open my $fh, '>', "$BASE/test001/items_tmp/stale.do"; CORE::close $fh;
-    Spool::group('test001', ['file']);
+    Spool::grouping('test001', ['file']);
     ok  -d  "$BASE/test001/items",     'items/ created';
-    ok  !-d "$BASE/test001/items_tmp", 'items_tmp/ cleaned up after group()';
+    ok  !-d "$BASE/test001/items_tmp", 'items_tmp/ cleaned up after grouping()';
+    cleanup();
+};
+
+subtest 'rows.do keeps UTF-8 text human-readable' => sub {
+    cleanup();
+    my $spool = Spool->open('test001');
+    $spool->add({ title => '漢字タイトル', body => '日本語の本文' });
+    $spool->close();
+    my $content = slurp_utf8("$BASE/test001/rows.do");
+    like $content, qr/漢字タイトル/, 'rows.do contains visible Japanese title';
+    like $content, qr/日本語の本文/, 'rows.do contains visible Japanese body';
+    unlike $content, qr/\\x\{[0-9A-Fa-f]+\}/, 'rows.do does not use hex escapes';
+    cleanup();
+};
+
+subtest 'meta.do keeps UTF-8 text human-readable' => sub {
+    cleanup();
+    my $spool = Spool->open('test001');
+    $spool->meta({
+        order => ['名前', '内容'],
+        attrs => { '名前' => 'str', '内容' => 'str' },
+        label => '見出し',
+    });
+    $spool->add({ '名前' => '山田', '内容' => '日本語' });
+    $spool->close();
+    my $content = slurp_utf8("$BASE/test001/meta.do");
+    like $content, qr/名前/,   'meta.do contains visible Japanese column name';
+    like $content, qr/内容/,   'meta.do contains visible Japanese column name';
+    like $content, qr/見出し/, 'meta.do contains visible Japanese meta value';
+    unlike $content, qr/\\x\{[0-9A-Fa-f]+\}/, 'meta.do does not use hex escapes';
+    cleanup();
+};
+
+subtest 'lines() item file keeps UTF-8 text human-readable' => sub {
+    cleanup();
+    my $spool = Spool->open('test001');
+    $spool->add({ text => '日本語の行', note => '漢字メモ' });
+    $spool->close();
+    Spool::lines('test001');
+    my $content = slurp_utf8("$BASE/test001/items/00000000.do");
+    like $content, qr/日本語の行/, 'lines item contains visible Japanese text';
+    like $content, qr/漢字メモ/,   'lines item contains visible Japanese note';
+    unlike $content, qr/\\x\{[0-9A-Fa-f]+\}/, 'lines item does not use hex escapes';
+    cleanup();
+};
+
+subtest 'records() item file keeps UTF-8 text human-readable' => sub {
+    cleanup();
+    my $spool = Spool->open('test001');
+    $spool->add({ file => '報告書', text => '一行目' });
+    $spool->add({ file => '報告書', text => '二行目' });
+    $spool->close();
+    Spool::records('test001', 'file');
+    my $content = slurp_utf8("$BASE/test001/items/00000000.do");
+    like $content, qr/報告書/, 'records item contains visible Japanese key value';
+    like $content, qr/一行目/, 'records item contains visible Japanese row';
+    like $content, qr/二行目/, 'records item contains visible Japanese row';
+    unlike $content, qr/\\x\{[0-9A-Fa-f]+\}/, 'records item does not use hex escapes';
+    cleanup();
+};
+
+subtest 'grouping() item file keeps UTF-8 text human-readable' => sub {
+    cleanup();
+    my $spool = Spool->open('test001');
+    $spool->meta({ order => ['kind', 'content'], attrs => {} });
+    $spool->add({ kind => '日本語', content => '漢字データ' });
+    $spool->close();
+    Spool::grouping('test001', ['kind']);
+    my $content = slurp_utf8("$BASE/test001/items/00000000.do");
+    like $content, qr/日本語/,     'group item contains visible Japanese group value';
+    like $content, qr/漢字データ/, 'group item contains visible Japanese child value';
+    unlike $content, qr/\\x\{[0-9A-Fa-f]+\}/, 'group item does not use hex escapes';
     cleanup();
 };
 

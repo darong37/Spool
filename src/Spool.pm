@@ -1,109 +1,55 @@
 package Spool;
 
-# Terms:
-# spool_id は spool を識別する文字列で、[A-Za-z0-9]+ のみを許可する
-# spool は /tmp/spool/<spool_id>/ に作られる 1 件分の退避領域
-# write フェーズは親プロセスが open() / meta() / add() / close() を行う段階
-# confirm フェーズは親とは別の fork プロセスが lines() / records() / group() を行う段階
-# read フェーズは count() / get() / remove() で確定済み item を扱う段階
-# rows.do は write フェーズで蓄積する全行データ
-# meta.do は close() 後は部分形、confirm 後は完全形を持つ
-# items/ は confirm 後の公開データ置き場
-# lines モードは 1 行を 1 item として確定する
-# records モードは同じキー値を持つ連続行を 1 item にまとめて確定する
-# group モードは TableTools::validate / TableTools::group / TableTools::detach に委譲して階層 item を作る
-#
-# Rules:
-# 親プロセスは write だけを担当し、全件読み込みや item ファイル生成をしてはいけない
-# confirm は必ず親とは別の fork プロセスで行う
-# プロセス間で受け渡すものはオブジェクトではなく spool_id 文字列だけにする
-# confirm の入力となる rows は TableTools::validate を通せるのと同等の前提を満たしていなければならない
-# 各 row は同じキー集合を持たなければならない
-# row の undef 値は confirm 前に空文字へ正規化されていなければならない
-# records() と group() に必要な並び順は呼び出し側が事前に整えておかなければならない
-# records() は入力順をそのまま走査し、非連続な同一キーの再出現をエラーにする
-# group() はできる限り TableTools を利用して構造化し、Spool 自体は退避と確定の責務に寄せる
-# write 中の中間状態と confirm 後の公開状態は分けて扱う
-# confirm 失敗時に壊れた items/ を公開してはいけない
-# read フェーズの参照単位は spool_id と index に固定する
-# confirm の 3 関数（lines/records/group）は全て fork した子プロセス内で実行する
-# 親プロセスは fork 後に全件読み込みや item 生成を行ってはいけない
-# 親プロセスは waitpid で子の正常終了を確認してから結果を参照する
-# 子プロセスが正常終了しなかった場合は confirm 失敗として扱う
-
 use strict;
 use warnings;
-use Data::Dumper;
+use CommonIO qw(append_file dumpU8 dying read_do run_in_fork write_do write_file);
 use File::Path qw(remove_tree);
-use POSIX qw(_exit);
 use TableTools qw(validate detach attach);
-# TableTools::group は完全修飾で呼ぶ（Spool::group との衝突回避）
 
 my $BASE = '/tmp/spool';
 
-# ---- internal helpers ----
+sub _write_items {
+    my ($dir, $mode, $items, $meta) = @_;
+    my $items_tmp = "$dir/items_tmp";
+    my $items_dir = "$dir/items";
+    my $count = scalar @$items;
 
-sub _write_do {
-    my ($path, $data) = @_;
-    open my $fh, '>:encoding(UTF-8)', $path or die "Cannot write $path: $!";
-    print {$fh} Data::Dumper->new([$data])->Terse(1)->Indent(1)->Dump;
-    close $fh;
-}
+    remove_tree($items_tmp) if -d $items_tmp;
 
-sub _read_do {
-    my ($path) = @_;
-    my $data = do $path;
-    die "Failed to read $path: $@" if $@;
-    die "Failed to read $path: file not found or empty" unless defined $data;
-    return $data;
-}
-
-sub _run_in_fork {
-    my ($dir, $code) = @_;
-    my $error_file = "$dir/error.do";
-    unlink $error_file if -f $error_file;
-    my $pid = fork();
-    die "fork failed: $!" unless defined $pid;
-    if ($pid == 0) {
-        eval { $code->() };
-        my $err = $@;
-        if ($err) {
-            eval { _write_do($error_file, $err) };
-            _exit(1);
+    if ($count) {
+        remove_tree($items_dir) if -d $items_dir;
+        mkdir $items_tmp or die "Cannot create items_tmp/: $!";
+        for my $i (0 .. $count - 1) {
+            write_do(sprintf('%s/%08d.do', $items_tmp, $i), $items->[$i]);
         }
-        _exit(0);
+        rename $items_tmp, $items_dir or die "Cannot rename items: $!";
     }
-    waitpid($pid, 0);
-    if ($? != 0) {
-        my $msg;
-        if (-f $error_file) {
-            $msg = do($error_file);
-            $msg = "confirm failed (error.do unreadable: $@)" if $@;
-        }
-        $msg //= "confirm failed for spool in $dir";
-        unlink $error_file if -f $error_file;
-        die $msg;
-    }
-    unlink $error_file if -f $error_file;
+
+    $meta->{count} = $count;
+    write_do("$dir/meta.do", $meta);
+    write_do("$dir/spool.do", {
+        ready => 1,
+        empty => ($count == 0 ? 1 : 0),
+        mode  => $mode,
+    });
+    unlink "$dir/rows.do";
 }
 
 # ---- write-side object API ----
 
 sub open {
     my ($class, $spool_id) = @_;
-    die "invalid spool_id: '$spool_id'" unless $spool_id =~ /\A[A-Za-z0-9]+\z/;
+    dying "invalid spool_id: '$spool_id'" unless $spool_id =~ /\A[A-Za-z0-9]+\z/;
     my $dir = "$BASE/$spool_id";
-    die "spool already exists: $dir" if -e $dir;
+    dying "spool already exists: $dir" if -e $dir;
     mkdir $BASE unless -d $BASE;
     mkdir $dir or die "Cannot create $dir: $!";
-    _write_do("$dir/spool.do", { ready => 0, empty => undef, mode => undef });
-    _write_do("$dir/meta.do", {});
-    open my $fh, '>:encoding(UTF-8)', "$dir/rows.do" or die "Cannot open rows.do: $!";
-    print {$fh} "[\n";
+    write_do("$dir/spool.do", { ready => 0, empty => undef, mode => undef });
+    write_do("$dir/meta.do", {});
+    write_file("$dir/rows.do", "use utf8;\n\n[\n");
     return bless {
         spool_id => $spool_id,
         dir      => $dir,
-        fh       => $fh,
         meta     => undef,
         added    => 0,
     }, $class;
@@ -111,26 +57,32 @@ sub open {
 
 sub meta {
     my ($self, $meta) = @_;
+    dying 'meta must be hashref' if ref($meta) ne 'HASH';
+    if (exists $meta->{attrs}) {
+        dying 'meta attrs must be hashref' if ref($meta->{attrs}) ne 'HASH';
+    }
+    if (exists $meta->{order}) {
+        dying 'meta order must be arrayref' if ref($meta->{order}) ne 'ARRAY';
+    }
     $self->{meta} = $meta;
     return $self;
 }
 
 sub add {
     my ($self, $row) = @_;
-    my $str = Data::Dumper->new([$row])->Terse(1)->Indent(0)->Dump;
-    print { $self->{fh} } $str . ",\n";
+    my $str = dumpU8($row, indent => 0);
+    append_file("$self->{dir}/rows.do", $str . ",\n");
     $self->{added}++;
     return $self;
 }
 
 sub close {
     my ($self) = @_;
-    print { $self->{fh} } "]\n";
-    CORE::close $self->{fh};
+    append_file("$self->{dir}/rows.do", "]\n");
     warn "spool closed with 0 rows: $self->{spool_id}\n" if $self->{added} == 0;
     my $meta = $self->{meta} // {};
     $meta->{count} = $self->{added};
-    _write_do("$self->{dir}/meta.do", $meta);
+    write_do("$self->{dir}/meta.do", $meta);
     return $self;
 }
 
@@ -139,147 +91,101 @@ sub close {
 sub lines {
     my ($spool_id) = @_;
     my $dir = "$BASE/$spool_id";
-    my $spool_state = _read_do("$dir/spool.do");
-    die "already confirmed: $spool_id" if $spool_state->{ready};
-    _run_in_fork($dir, sub {
-        my $rows = do "$dir/rows.do";
-        die "invalid spool data for $spool_id: $@" if $@;
-        die "invalid spool data for $spool_id" unless defined $rows;
-        my $items_tmp = "$dir/items_tmp";
-        remove_tree($items_tmp) if -d $items_tmp;
-        my $count = 0;
-        if (@$rows) {
-            mkdir $items_tmp or die "Cannot create items_tmp/: $!";
-            for my $row (@$rows) {
-                _write_do(sprintf('%s/%08d.do', $items_tmp, $count), $row);
-                $count++;
-            }
-            rename $items_tmp, "$dir/items" or die "Cannot rename items: $!";
-            my $meta = _read_do("$dir/meta.do");
-            $meta->{count} = $count;
-            _write_do("$dir/meta.do", $meta);
-        }
-        _write_do("$dir/spool.do", { ready => 1, empty => ($count == 0 ? 1 : 0), mode => 'lines' });
-        unlink "$dir/rows.do";
+    my $spool_state = read_do("$dir/spool.do");
+    dying "already confirmed: $spool_id" if $spool_state->{ready};
+
+    run_in_fork(sub {
+        my $rows = read_do("$dir/rows.do");
+        my $meta = read_do("$dir/meta.do");
+        my $items = $rows;
+        _write_items($dir, 'lines', $items, $meta);
     });
-    my $state = _read_do("$dir/spool.do");
-    return 0 if $state->{empty};
-    my $meta = _read_do("$dir/meta.do");
-    return $meta->{count};
+    return count($spool_id);
 }
 
 sub records {
     my ($spool_id, @key_cols) = @_;
     my $dir = "$BASE/$spool_id";
-    my $spool_state = _read_do("$dir/spool.do");
-    die "already confirmed: $spool_id" if $spool_state->{ready};
-    _run_in_fork($dir, sub {
-        my $rows = do "$dir/rows.do";
-        die "invalid spool data for $spool_id: $@" if $@;
-        die "invalid spool data for $spool_id" unless defined $rows;
-        my $meta = _read_do("$dir/meta.do");
+    my $spool_state = read_do("$dir/spool.do");
+    dying "already confirmed: $spool_id" if $spool_state->{ready};
+
+    run_in_fork(sub {
+        my $rows = read_do("$dir/rows.do");
+        my $meta = read_do("$dir/meta.do");
         for my $row (@$rows) {
             for my $col (@key_cols) {
-                die "key column '$col' not found in row" unless exists $row->{$col};
+                dying "key column '$col' not found in row" unless exists $row->{$col};
             }
         }
-        my $items_tmp = "$dir/items_tmp";
-        remove_tree($items_tmp) if -d $items_tmp;
-        my $count = 0;
-        if (@$rows) {
-            my $table;
-            if ($meta->{attrs} && %{ $meta->{attrs} }) {
-                $table = attach($rows, { '#' => { attrs => $meta->{attrs}, order => $meta->{order} } });
-                $table = validate($table);
-            } else {
-                $table = validate($rows, $meta->{order});
-            }
-            my $grouped = TableTools::group($table, [@key_cols]);
-            my ($grouped_rows) = detach($grouped);
-            mkdir $items_tmp or die "Cannot create items_tmp/: $!";
-            for my $g (@$grouped_rows) {
-                my %key_vals = map { $_ => $g->{$_} } @key_cols;
-                my @item = map { { %key_vals, %$_ } } @{ $g->{'@'} };
-                _write_do(sprintf('%s/%08d.do', $items_tmp, $count), \@item);
-                $count++;
-            }
-            rename $items_tmp, "$dir/items" or die "Cannot rename items: $!";
-            $meta->{count}    = $count;
-            $meta->{key_cols} = \@key_cols;
-            _write_do("$dir/meta.do", $meta);
+        my $table;
+        if ($meta->{attrs} && %{ $meta->{attrs} }) {
+            $table = attach($rows, { '#' => { attrs => $meta->{attrs}, order => $meta->{order} } });
+            $table = validate($table);
+        } else {
+            $table = validate($rows, $meta->{order});
         }
-        _write_do("$dir/spool.do", { ready => 1, empty => ($count == 0 ? 1 : 0), mode => 'records' });
-        unlink "$dir/rows.do";
+
+        my $grouped = TableTools::group($table, [@key_cols]);
+        my ($grouped_rows) = detach($grouped);
+        my @items;
+        for my $g (@$grouped_rows) {
+            my %key_vals = map { $_ => $g->{$_} } @key_cols;
+            push @items, [ map { { %key_vals, %$_ } } @{ $g->{'@'} } ];
+        }
+
+        $meta->{key_cols} = \@key_cols;
+        _write_items($dir, 'records', \@items, $meta);
     });
-    my $state = _read_do("$dir/spool.do");
-    return 0 if $state->{empty};
-    my $meta = _read_do("$dir/meta.do");
-    return $meta->{count};
+    return count($spool_id);
 }
 
-sub group {
+sub grouping {
     my ($spool_id, @groups) = @_;
     my $dir = "$BASE/$spool_id";
-    my $spool_state = _read_do("$dir/spool.do");
-    die "already confirmed: $spool_id" if $spool_state->{ready};
-    _run_in_fork($dir, sub {
-        my $meta = _read_do("$dir/meta.do");
-        die "order is required for group(): $spool_id" unless $meta->{order};
-        my $rows = do "$dir/rows.do";
-        die "invalid spool data for $spool_id: $@" if $@;
-        die "invalid spool data for $spool_id" unless defined $rows;
-        my $items_tmp = "$dir/items_tmp";
-        remove_tree($items_tmp) if -d $items_tmp;
-        my $count = 0;
-        if (@$rows) {
-            my $table;
-            if ($meta->{attrs} && %{ $meta->{attrs} }) {
-                $table = attach($rows, { '#' => { attrs => $meta->{attrs}, order => $meta->{order} } });
-                $table = validate($table);
-            } else {
-                $table = validate($rows, $meta->{order});
-            }
-            my $grouped = TableTools::group($table, @groups);
-            my ($items) = detach($grouped);
-            mkdir $items_tmp or die "Cannot create items_tmp/: $!";
-            for my $item (@$items) {
-                _write_do(sprintf('%s/%08d.do', $items_tmp, $count), $item);
-                $count++;
-            }
-            rename $items_tmp, "$dir/items" or die "Cannot rename items: $!";
-            $meta->{count}  = $count;
-            $meta->{groups} = \@groups;
-            _write_do("$dir/meta.do", $meta);
+    my $spool_state = read_do("$dir/spool.do");
+    dying "already confirmed: $spool_id" if $spool_state->{ready};
+
+    run_in_fork(sub {
+        my $rows = read_do("$dir/rows.do");
+        my $meta = read_do("$dir/meta.do");
+        dying "order is required for grouping(): $spool_id" unless $meta->{order};
+        my $table;
+        if ($meta->{attrs} && %{ $meta->{attrs} }) {
+            $table = attach($rows, { '#' => { attrs => $meta->{attrs}, order => $meta->{order} } });
+            $table = validate($table);
+        } else {
+            $table = validate($rows, $meta->{order});
         }
-        _write_do("$dir/spool.do", { ready => 1, empty => ($count == 0 ? 1 : 0), mode => 'group' });
-        unlink "$dir/rows.do";
+
+        my $grouped = TableTools::group($table, @groups);
+        my ($items) = detach($grouped);
+
+        $meta->{groups} = \@groups;
+        _write_items($dir, 'grouping', $items, $meta);
     });
-    my $state = _read_do("$dir/spool.do");
-    return 0 if $state->{empty};
-    my $meta = _read_do("$dir/meta.do");
-    return $meta->{count};
+    return count($spool_id);
 }
 
 sub count {
     my ($spool_id) = @_;
     my $dir = "$BASE/$spool_id";
-    my $spool = _read_do("$dir/spool.do");
-    die "spool not ready: $spool_id" unless $spool->{ready};
+    my $spool = read_do("$dir/spool.do");
+    dying "spool not ready: $spool_id" unless $spool->{ready};
     return 0 if $spool->{empty};
-    my $meta = _read_do("$dir/meta.do");
+    my $meta = read_do("$dir/meta.do");
     return $meta->{count};
 }
 
 sub get {
     my ($spool_id, $i) = @_;
     my $dir = "$BASE/$spool_id";
-    my $spool = _read_do("$dir/spool.do");
-    die "spool not ready: $spool_id" unless $spool->{ready};
-    die "index out of range: $i (empty spool)" if $spool->{empty};
-    my $meta = _read_do("$dir/meta.do");
-    die "index out of range: $i (count=$meta->{count})"
+    my $spool = read_do("$dir/spool.do");
+    dying "spool not ready: $spool_id" unless $spool->{ready};
+    dying "index out of range: $i (empty spool)" if $spool->{empty};
+    my $meta = read_do("$dir/meta.do");
+    dying "index out of range: $i (count=$meta->{count})"
         unless defined $i && $i >= 0 && $i < $meta->{count};
-    return _read_do(sprintf '%s/items/%08d.do', $dir, $i);
+    return read_do(sprintf '%s/items/%08d.do', $dir, $i);
 }
 
 sub remove {
