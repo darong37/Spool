@@ -96,6 +96,8 @@ sub open {
     die "spool already exists: $dir" if -e $dir;
     mkdir $BASE unless -d $BASE;
     mkdir $dir or die "Cannot create $dir: $!";
+    _write_do("$dir/spool.do", { ready => 0, empty => undef, mode => undef });
+    _write_do("$dir/meta.do", {});
     open my $fh, '>:encoding(UTF-8)', "$dir/rows.do" or die "Cannot open rows.do: $!";
     print {$fh} "[\n";
     return bless {

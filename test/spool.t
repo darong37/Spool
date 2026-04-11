@@ -14,7 +14,21 @@ subtest 'open creates directory and rows.do' => sub {
     my $spool = Spool->open('test001');
     ok -d "$BASE/test001",           'spool dir exists';
     ok -f "$BASE/test001/rows.do",   'rows.do exists';
-    ok !-f "$BASE/test001/meta.do",  'meta.do not yet written';
+    ok -f "$BASE/test001/spool.do",  'spool.do created by open';
+    ok -f "$BASE/test001/meta.do",   'meta.do created by open';
+    cleanup();
+};
+
+subtest 'open() writes initial spool.do' => sub {
+    cleanup();
+    my $spool = Spool->open('test001');
+    my $state = do "$BASE/test001/spool.do";
+    is   $state->{ready}, 0,     'ready=0';
+    ok  !defined $state->{empty}, 'empty=undef';
+    ok  !defined $state->{mode},  'mode=undef';
+    my $meta = do "$BASE/test001/meta.do";
+    is ref($meta), 'HASH',       'meta.do is hashref';
+    is scalar keys %$meta, 0,   'meta.do is empty hash';
     cleanup();
 };
 
