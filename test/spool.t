@@ -184,10 +184,14 @@ subtest 'lines() overwrites partial meta.do with complete form (no meta)' => sub
     $spool->close();
     Spool::lines('test001');
     my $complete = do "$BASE/test001/meta.do";
-    is $complete->{mode},  'lines', 'mode=lines';
-    is $complete->{count}, 2,       'count=2';
-    ok !exists $complete->{order},  'no order when meta() not called';
-    ok !exists $complete->{attrs},  'no attrs when meta() not called';
+    ok !exists $complete->{mode},  'no mode in meta.do after lines()';
+    is $complete->{count}, 2,      'count=2 in meta.do';
+    ok !exists $complete->{order}, 'no order when meta() not called';
+    ok !exists $complete->{attrs}, 'no attrs when meta() not called';
+    my $state = do "$BASE/test001/spool.do";
+    is $state->{ready}, 1,       'ready=1 in spool.do';
+    is $state->{empty}, 0,       'empty=0 in spool.do';
+    is $state->{mode},  'lines', 'mode=lines in spool.do';
     cleanup();
 };
 
@@ -203,10 +207,14 @@ subtest 'lines() overwrites partial meta.do with complete form (with meta)' => s
     ok !exists $partial->{mode},  'no mode before lines()';
     Spool::lines('test001');
     my $complete = do "$BASE/test001/meta.do";
-    is $complete->{mode},  'lines',     'mode=lines in complete meta.do';
+    ok !exists $complete->{mode},       'no mode in meta.do after lines()';
     is $complete->{count}, 2,           'count=2 in complete meta.do';
     is_deeply $complete->{order}, ['a'], 'order preserved in complete meta.do';
     is $complete->{attrs}{a}, 'num',    'attrs preserved in complete meta.do';
+    my $state = do "$BASE/test001/spool.do";
+    is $state->{ready}, 1,       'ready=1 in spool.do';
+    is $state->{empty}, 0,       'empty=0 in spool.do';
+    is $state->{mode},  'lines', 'mode=lines in spool.do';
     cleanup();
 };
 

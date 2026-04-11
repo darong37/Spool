@@ -139,26 +139,31 @@ sub close {
 sub lines {
     my ($spool_id) = @_;
     my $dir = "$BASE/$spool_id";
-    die "already confirmed: $spool_id" if -d "$dir/items";
+    my $spool_state = _read_do("$dir/spool.do");
+    die "already confirmed: $spool_id" if $spool_state->{ready} || -d "$dir/items";
     _run_in_fork($dir, sub {
         my $rows = do "$dir/rows.do";
         die "invalid spool data for $spool_id: $@" if $@;
         die "invalid spool data for $spool_id" unless defined $rows;
-        my $meta = _read_do("$dir/meta.do");
         my $items_tmp = "$dir/items_tmp";
         remove_tree($items_tmp) if -d $items_tmp;
-        mkdir $items_tmp or die "Cannot create items_tmp/: $!";
         my $count = 0;
-        for my $row (@$rows) {
-            _write_do(sprintf('%s/%08d.do', $items_tmp, $count), $row);
-            $count++;
+        if (@$rows) {
+            mkdir $items_tmp or die "Cannot create items_tmp/: $!";
+            for my $row (@$rows) {
+                _write_do(sprintf('%s/%08d.do', $items_tmp, $count), $row);
+                $count++;
+            }
+            rename $items_tmp, "$dir/items" or die "Cannot rename items: $!";
+            my $meta = _read_do("$dir/meta.do");
+            $meta->{count} = $count;
+            _write_do("$dir/meta.do", $meta);
         }
-        rename $items_tmp, "$dir/items" or die "Cannot rename items: $!";
-        $meta->{mode}  = 'lines';
-        $meta->{count} = $count;
-        _write_do("$dir/meta.do", $meta);
+        _write_do("$dir/spool.do", { ready => 1, empty => ($count == 0 ? 1 : 0), mode => 'lines' });
         unlink "$dir/rows.do";
     });
+    my $state = _read_do("$dir/spool.do");
+    return 0 if $state->{empty};
     my $meta = _read_do("$dir/meta.do");
     return $meta->{count};
 }
