@@ -466,11 +466,15 @@ subtest 'records() overwrites partial meta.do with complete form (no meta)' => s
     ok !exists $partial->{key_cols}, 'no key_cols before records()';
     Spool::records('test001', 'file');
     my $complete = do "$BASE/test001/meta.do";
-    is $complete->{mode},  'records',          'mode=records';
+    ok !exists $complete->{mode},              'no mode in meta.do after records()';
     is $complete->{count}, 2,                  'count=2';
     is_deeply $complete->{key_cols}, ['file'], 'key_cols in complete meta.do';
     ok !exists $complete->{order},             'no order when meta() not called';
     ok !exists $complete->{attrs},             'no attrs when meta() not called';
+    my $state = do "$BASE/test001/spool.do";
+    is $state->{ready}, 1,         'ready=1 in spool.do';
+    is $state->{empty}, 0,         'empty=0 in spool.do';
+    is $state->{mode},  'records', 'mode=records in spool.do';
     cleanup();
 };
 
@@ -483,11 +487,14 @@ subtest 'records() overwrites partial meta.do with complete form (with meta)' =>
     $spool->close();
     Spool::records('test001', 'file');
     my $complete = do "$BASE/test001/meta.do";
-    is $complete->{mode},  'records',                  'mode=records';
+    ok !exists $complete->{mode},                  'no mode in meta.do after records()';
     is $complete->{count}, 2,                          'count=2';
     is_deeply $complete->{key_cols}, ['file'],         'key_cols preserved';
     is_deeply $complete->{order}, ['file', 'line'],    'order preserved';
     is $complete->{attrs}{file}, 'str',                'attrs preserved';
+    my $state = do "$BASE/test001/spool.do";
+    is $state->{ready}, 1,         'ready=1 in spool.do';
+    is $state->{mode},  'records', 'mode=records in spool.do';
     cleanup();
 };
 

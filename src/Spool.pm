@@ -171,50 +171,48 @@ sub lines {
 sub records {
     my ($spool_id, @key_cols) = @_;
     my $dir = "$BASE/$spool_id";
-    die "already confirmed: $spool_id" if -d "$dir/items";
+    my $spool_state = _read_do("$dir/spool.do");
+    die "already confirmed: $spool_id" if $spool_state->{ready} || -d "$dir/items"; # items/ check removed in Task4
     _run_in_fork($dir, sub {
         my $rows = do "$dir/rows.do";
         die "invalid spool data for $spool_id: $@" if $@;
         die "invalid spool data for $spool_id" unless defined $rows;
         my $meta = _read_do("$dir/meta.do");
-
-        # キー列の存在を事前確認（エラーメッセージを保証する）
         for my $row (@$rows) {
             for my $col (@key_cols) {
                 die "key column '$col' not found in row" unless exists $row->{$col};
             }
         }
-
-        # TableTools で 1 段階グルーピング（非連続再出現は TableTools が die する）
-        my $table;
-        if ($meta->{attrs} && %{ $meta->{attrs} }) {
-            $table = attach($rows, { '#' => { attrs => $meta->{attrs}, order => $meta->{order} } });
-            $table = validate($table);
-        } else {
-            $table = validate($rows, $meta->{order});
-        }
-        my $grouped = TableTools::group($table, [@key_cols]);
-        my ($grouped_rows) = detach($grouped);
-
-        # 各グループのキー列値を子行にマージして item を構成する
         my $items_tmp = "$dir/items_tmp";
         remove_tree($items_tmp) if -d $items_tmp;
-        mkdir $items_tmp or die "Cannot create items_tmp/: $!";
         my $count = 0;
-        for my $g (@$grouped_rows) {
-            my %key_vals = map { $_ => $g->{$_} } @key_cols;
-            my @item = map { { %key_vals, %$_ } } @{ $g->{'@'} };
-            _write_do(sprintf('%s/%08d.do', $items_tmp, $count), \@item);
-            $count++;
+        if (@$rows) {
+            my $table;
+            if ($meta->{attrs} && %{ $meta->{attrs} }) {
+                $table = attach($rows, { '#' => { attrs => $meta->{attrs}, order => $meta->{order} } });
+                $table = validate($table);
+            } else {
+                $table = validate($rows, $meta->{order});
+            }
+            my $grouped = TableTools::group($table, [@key_cols]);
+            my ($grouped_rows) = detach($grouped);
+            mkdir $items_tmp or die "Cannot create items_tmp/: $!";
+            for my $g (@$grouped_rows) {
+                my %key_vals = map { $_ => $g->{$_} } @key_cols;
+                my @item = map { { %key_vals, %$_ } } @{ $g->{'@'} };
+                _write_do(sprintf('%s/%08d.do', $items_tmp, $count), \@item);
+                $count++;
+            }
+            rename $items_tmp, "$dir/items" or die "Cannot rename items: $!";
+            $meta->{count}    = $count;
+            $meta->{key_cols} = \@key_cols;
+            _write_do("$dir/meta.do", $meta);
         }
-        rename $items_tmp, "$dir/items" or die "Cannot rename items: $!";
-
-        $meta->{mode}     = 'records';
-        $meta->{count}    = $count;
-        $meta->{key_cols} = \@key_cols;
-        _write_do("$dir/meta.do", $meta);
+        _write_do("$dir/spool.do", { ready => 1, empty => ($count == 0 ? 1 : 0), mode => 'records' });
         unlink "$dir/rows.do";
     });
+    my $state = _read_do("$dir/spool.do");
+    return 0 if $state->{empty};
     my $meta = _read_do("$dir/meta.do");
     return $meta->{count};
 }
