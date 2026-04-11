@@ -13,8 +13,8 @@ Three confirmation modes are available:
 | Mode | Description |
 |---|---|
 | `lines` | Each row becomes an individual item |
-| `records` | Consecutive rows with the same key(s) are grouped |
-| `group` | Rows are organized into a nested hierarchy |
+| `records` | Consecutive rows with the same key(s) are grouped into an arrayref |
+| `grouping` | Rows are organized into a nested hierarchy |
 
 ## Requirements
 
@@ -40,7 +40,7 @@ $spool->add({ file => 'a.txt', line => 2 });
 $spool->close();                             # finalize write
 ```
 
-`meta()` must be called before any `add()`. `order` is required when using `group()`.
+`meta()` can be called before or after `add()`, but must be called before `close()`. `order` is required when using `grouping()`.
 
 ### Confirm Phase (Function API, no object needed)
 
@@ -48,11 +48,11 @@ $spool->close();                             # finalize write
 # lines: each row becomes one item
 Spool::lines('myspool');
 
-# records: consecutive same-key rows become one item
+# records: consecutive same-key rows become one item (arrayref of row hashrefs)
 Spool::records('myspool', 'file');
 
-# group: hierarchical grouping (requires order in meta)
-Spool::group('myspool', ['file']);
+# grouping: hierarchical grouping (requires order in meta)
+Spool::grouping('myspool', ['file']);
 ```
 
 ### Reading Results
@@ -62,15 +62,16 @@ my $count = Spool::count('myspool');
 
 for my $i (0 .. $count - 1) {
     my $item = Spool::get('myspool', $i);
-    # $item is a hashref (lines/group) or arrayref (records)
+    # lines/grouping → hashref
+    # records        → arrayref of hashrefs (key cols included in each row)
 }
 
 Spool::remove('myspool'); # delete spool when done
 ```
 
-### group() Item Structure
+### grouping() Item Structure
 
-Given rows with `order = ['file', 'line', 'text']` and `Spool::group('myspool', ['file'])`:
+Given rows with `order = ['file', 'line', 'text']` and `Spool::grouping('myspool', ['file'])`:
 
 ```perl
 # Item 0:
@@ -96,8 +97,9 @@ All spools are stored under `/tmp/spool/<spool_id>/`.
 | File | Present When | Contents |
 |---|---|---|
 | `rows.do` | After open, before confirm | Array of row hashrefs |
-| `meta.do` | After close (partial) / after confirm (complete) | Metadata hash |
-| `items/NNNNNNNN.do` | After confirm | Individual items |
+| `spool.do` | After open, always | State hash (`ready`, `empty`, `mode`) |
+| `meta.do` | After open (empty) / after close (partial) / after confirm (complete) | Metadata hash |
+| `items/NNNNNNNN.do` | After confirm (1+ results) | Individual items |
 
 ## Error Handling
 
@@ -105,11 +107,10 @@ All spools are stored under `/tmp/spool/<spool_id>/`.
 |---|---|
 | Invalid `spool_id` | `die` |
 | Duplicate `open` | `die` |
-| `meta()` after `add()` | `die` |
 | Confirm on already-confirmed spool | `die` |
 | Missing key column in row | `die` |
 | Out-of-order key reappearance | `die` |
-| Missing `order` for `group()` | `die` |
+| Missing `order` for `grouping()` | `die` |
 | `get()` with out-of-range index | `die` |
 | `count()`/`get()` on unconfirmed spool | `die` |
 

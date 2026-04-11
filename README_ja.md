@@ -11,8 +11,8 @@ Spool はデータ収集（write フェーズ）とデータ確定（confirm フ
 | モード | 説明 |
 |---|---|
 | `lines` | 各行が個別の item になる |
-| `records` | 連続する同一キーの行がグループ化される |
-| `group` | 行が階層的にグループ化される |
+| `records` | 連続する同一キーの行が配列リファレンスにグループ化される |
+| `grouping` | 行が階層的にグループ化される |
 
 ## 動作要件
 
@@ -38,7 +38,7 @@ $spool->add({ file => 'a.txt', line => 2 });
 $spool->close();                             # 書き込み完了
 ```
 
-`meta()` は `add()` より前に呼ぶ必要があります。`group()` を使う場合は `order` が必須です。
+`meta()` は `add()` の前後どちらで呼んでも構いませんが、`close()` より前に呼ぶ必要があります。`grouping()` を使う場合は `order` が必須です。
 
 ### confirm フェーズ（関数 API、オブジェクト不要）
 
@@ -46,11 +46,11 @@ $spool->close();                             # 書き込み完了
 # lines: 各行が1つの item
 Spool::lines('myspool');
 
-# records: 連続する同一キーの行をグループ化
+# records: 連続する同一キーの行を配列リファレンスにグループ化
 Spool::records('myspool', 'file');
 
-# group: 階層グループ化（meta に order が必要）
-Spool::group('myspool', ['file']);
+# grouping: 階層グループ化（meta に order が必要）
+Spool::grouping('myspool', ['file']);
 ```
 
 ### 結果の読み取り
@@ -60,16 +60,16 @@ my $count = Spool::count('myspool');
 
 for my $i (0 .. $count - 1) {
     my $item = Spool::get('myspool', $i);
-    # lines/group → ハッシュリファレンス
-    # records → 配列リファレンス
+    # lines/grouping → ハッシュリファレンス
+    # records        → 配列リファレンス（各行にキー列を含む）
 }
 
 Spool::remove('myspool'); # 使い終わったら削除
 ```
 
-### group() の item 構造
+### grouping() の item 構造
 
-`order = ['file', 'line', 'text']` で `Spool::group('myspool', ['file'])` を呼んだ場合：
+`order = ['file', 'line', 'text']` で `Spool::grouping('myspool', ['file'])` を呼んだ場合：
 
 ```perl
 # item 0:
@@ -95,8 +95,9 @@ Spool::remove('myspool'); # 使い終わったら削除
 | ファイル | 存在タイミング | 内容 |
 |---|---|---|
 | `rows.do` | open 後〜confirm 前 | 行データの配列 |
-| `meta.do` | close 後（部分形）/ confirm 後（完全形） | メタ情報ハッシュ |
-| `items/NNNNNNNN.do` | confirm 後 | 各アイテム |
+| `spool.do` | open 後・常に存在 | 状態ハッシュ（`ready`・`empty`・`mode`） |
+| `meta.do` | open 後（空）/ close 後（部分形）/ confirm 後（完全形） | メタ情報ハッシュ |
+| `items/NNNNNNNN.do` | confirm 後（1件以上のとき） | 各アイテム |
 
 ## エラー処理
 
@@ -104,11 +105,10 @@ Spool::remove('myspool'); # 使い終わったら削除
 |---|---|
 | 不正な `spool_id` | `die` |
 | 重複 `open` | `die` |
-| `add()` 後の `meta()` | `die` |
 | 確定済み spool への再確定 | `die` |
 | 行にキー列が存在しない | `die` |
 | キー値の順序違反（再出現） | `die` |
-| `group()` で `order` がない | `die` |
+| `grouping()` で `order` がない | `die` |
 | `get()` で範囲外インデックス | `die` |
 | 未確定 spool への `count()`/`get()` | `die` |
 
