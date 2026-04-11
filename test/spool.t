@@ -652,10 +652,13 @@ subtest 'group() confirms with 0 items on empty spool' => sub {
     $spool->meta({ order => ['file', 'line'] });
     $spool->close();
     my $count = Spool::group('test001', ['file']);
-    is $count, 0,                         '0 items confirmed';
-    is Spool::count('test001'), 0,        'count() returns 0';
-    ok -d "$BASE/test001/items",          'items/ exists';
-    ok !-f "$BASE/test001/rows.do",       'rows.do removed';
+    is $count, 0,                          '0 items confirmed';
+    ok !-d "$BASE/test001/items",          'items/ not created for 0 results';
+    ok !-f "$BASE/test001/rows.do",        'rows.do removed';
+    my $state = do "$BASE/test001/spool.do";
+    is $state->{ready}, 1,       'ready=1 in spool.do';
+    is $state->{empty}, 1,       'empty=1 in spool.do';
+    is $state->{mode},  'group', 'mode=group in spool.do';
     cleanup();
 };
 
@@ -726,11 +729,15 @@ subtest 'group() overwrites partial meta.do with complete form' => sub {
     ok !exists $partial->{groups}, 'no groups before group()';
     Spool::group('test001', ['file']);
     my $complete = do "$BASE/test001/meta.do";
-    is $complete->{mode},  'group',            'mode=group in complete meta.do';
-    is $complete->{count}, 2,                  'count=2 in complete meta.do';
-    is_deeply $complete->{groups}, [['file']],         'groups in complete meta.do';
-    is_deeply $complete->{order},  ['file', 'line'],   'order preserved in complete meta.do';
-    is_deeply $complete->{attrs},  {},                 'attrs preserved in complete meta.do';
+    ok !exists $complete->{mode},                   'no mode in meta.do after group()';
+    is $complete->{count}, 2,                        'count=2 in complete meta.do';
+    is_deeply $complete->{groups}, [['file']],       'groups in complete meta.do';
+    is_deeply $complete->{order},  ['file', 'line'], 'order preserved in complete meta.do';
+    is_deeply $complete->{attrs},  {},               'attrs preserved in complete meta.do';
+    my $state = do "$BASE/test001/spool.do";
+    is $state->{ready}, 1,       'ready=1 in spool.do';
+    is $state->{empty}, 0,       'empty=0 in spool.do';
+    is $state->{mode},  'group', 'mode=group in spool.do';
     cleanup();
 };
 
